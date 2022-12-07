@@ -61,10 +61,10 @@ team_t team = {
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp - DSIZE)))) 
 
 // 이전의 가용블록의 위치를 저장하는 포인터를 저장하는 포인터
-#define SUCC_P(bp)  (*(void **)(bp))
+#define PRED_P(bp)  (*(void **)(bp))
 
 // 다음의 가용블록의 위치를 저장하는 포인터를 저장하는 포인터
-#define PRED_P(bp)  (*(void **)((bp)+WSIZE))
+#define SUCC_P(bp)  (*(void **)((bp)+WSIZE))
 
 
 /* single word (4) or double word (8) alignment */
@@ -84,13 +84,15 @@ static void list_add(char* bp);
 static void list_remove(char* bp);
 
 static char* heap_listp;
+static char* end_listp = NULL;
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {
-    if((heap_listp = (char*)mem_sbrk(6*WSIZE)) == (void *)-1) return -1;
+    if((heap_listp = (char*)mem_sbrk(6*WSIZE)) == (void *)-1)
 	
+
     PUT(heap_listp,0);                                  // Alignment padding
     PUT(heap_listp + (1*WSIZE), PACK(2*DSIZE,1));       // Prologue header  -> why 2*DSIZE ??? 헤더,푸터, 가용리스트를 가리키는 포인터(두개!) 
     PUT(heap_listp + (2*WSIZE), heap_listp+(2*WSIZE));  // 이전 가용 리스트 블록을 가리키는 포인터
@@ -98,8 +100,8 @@ int mm_init(void)
     PUT(heap_listp + (4*WSIZE), PACK(2*DSIZE,1));       // Prologue Footer
     PUT(heap_listp + (5*WSIZE), PACK(0,1));             // Epilogue header
     heap_listp += (2*WSIZE);
-    
-    
+    end_listp = heap_listp;
+
     // Extend the empty heap with a free block of CHUNKSIZE bytes
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL) return -1;
     
@@ -144,6 +146,7 @@ void *mm_malloc(size_t size)
     extendsize = MAX(asize,CHUNKSIZE);
     if((bp = extend_heap(extendsize/WSIZE)) == NULL) return NULL;
     place(bp,asize);
+    end_listp =bp;
     return bp;
 
 
@@ -174,30 +177,30 @@ void *coalesce(void *bp){
 
     // case 2  
     else if(prev_alloc && !next_alloc) {
-        list_remove(NEXT_BLKP(bp));
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         PUT(HDRP(bp),PACK(size,0));
         PUT(FTRP(bp),PACK(size,0));
+        list_remove(NEXT_BLKP(bp));
     }
     // case 3
     else if(!prev_alloc && next_alloc){
-        list_remove(PREV_BLKP(bp));
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
         PUT(FTRP(bp), PACK(size,0));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size,0));
         bp = PREV_BLKP(bp);
+        list_remove(PREV_BLKP(bp));
     }
     // case 4
     else{
-        list_remove(NEXT_BLKP(bp));
-        list_remove(PREV_BLKP(bp));
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size,0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size,0));
         bp = PREV_BLKP(bp);
+        list_remove(NEXT_BLKP(bp));
+        list_remove(PREV_BLKP(bp));
 
     }
-    list_add(bp);
+    list_add(bp)
     return bp;
 }
 
@@ -241,18 +244,17 @@ void *mm_realloc(void *bp, size_t size){
         // 다음 블록의 할당 상태를 받아옴
         size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
         // 다음 블록의 사이즈를 받아옴
-        size_t current_size = old_size + GET_SIZE(HDRP(NEXT_BLKP(bp)));
+        size_t current_size = old_size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
 
         // 다음 블록이 가용 상태이고, 다음 블록의 사이즈의 합이
         //새로운 사이즈보다 크면
         // 바로 합쳐서 할당
         if(!next_alloc && current_size >= new_size){
             // 할당 상태로 헤더 추가
-            list_remove(NEXT_BLKP(bp));
             PUT(HDRP(bp), PACK(current_size, 1));
             // 할당 상태로 풋터 추가
             PUT(FTRP(bp), PACK(current_size, 1));
-    
+
             // 기존의 bp 반환
             return bp;
         }
@@ -276,59 +278,7 @@ void *mm_realloc(void *bp, size_t size){
 }
 
 
-// void *mm_realloc(void *ptr, size_t size)
-// {
-//     void *oldptr = ptr;
-//     size_t copySize;
-//     // adjust block size to include overhead and aligment reqs.
-//     size_t new_size;
-//     if(size <= DSIZE)
-//         new_size = 2 * DSIZE;
-//     else{
-//         new_size = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
-//     }
-//     // (size/WSIZE % 2) ? (size/WSIZE + 1) * WSIZE : size/WSIZE * WSIZE;
-//     //새로 할당할 사이즈가 본래 사이즈보다 작거나 같을 때
-//     //즉시 반환
-//     copySize = GET_SIZE(HDRP(oldptr));
-//     if (new_size <= copySize)
-//         return oldptr;
 
-//     // 사이즈가 본래 사이즈 보다 크고, 다음 블럭이 가용 블럭 일 경우
-//     size_t size_sum = GET_SIZE(HDRP(NEXT_BLKP(oldptr))) + GET_SIZE(HDRP(oldptr));
-//     if (!GET_ALLOC(HDRP(NEXT_BLKP(oldptr))) && size_sum >= new_size)
-//     {
-//         if (size_sum - new_size < 2*DSIZE)
-//         {
-//             PUT(HDRP(oldptr), PACK(size_sum, 1));
-//             PUT(FTRP(oldptr), PACK(size_sum, 1));
-//         }else{
-//             PUT(HDRP(oldptr), PACK(new_size, 1));
-//             PUT(FTRP(oldptr), PACK(new_size, 1));
-//             oldptr = NEXT_BLKP(oldptr);
-//             PUT(HDRP(oldptr), PACK(size_sum - new_size, 0));
-//             PUT(FTRP(oldptr), PACK(size_sum - new_size, 0));
-//         }
-//         return ptr;
-//     }
-
-//     // 일반적인 raalloc 함수
-//     // malloc을 이용해서 새로운 사이즈를 할당하고 할당된 곳에
-//     // 데이터를 이전해서 보존한 이후, 본래 할당된 메모리를 가용 메모리로 전환
-//       // 새로운 사이즈로 new bp 할당
-//             void *new_bp = mm_malloc(new_size);
-//             if (new_bp == NULL) return NULL;
-//             // 새로운 bp에 새로운 사이즈로 가용 블록 분항
-//             // place(new_bp, new_size);
-//             // 메모리의 특정한 부분으로부터 얼마까지의 다른 메모리 영역으로 복사해주는 함수
-//             // 이전 bp로부터 사이즈만큼의 문자를 새로운 bp에 복사하라
-//             // memcpy(new_bp, bp, new_size);
-//             memmove(new_bp, oldptr, new_size);
-//             // 이전 bp free
-//             mm_free(oldptr);
-//             // 새로운 bp 반환
-//             return new_bp;
-// }
 void *extend_heap(size_t words){
     char *bp;
     size_t size;
@@ -341,7 +291,7 @@ void *extend_heap(size_t words){
     PUT(HDRP(bp), PACK(size,0));                 // Free block header
     PUT(FTRP(bp),PACK(size,0));                  // Free block footer
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0,1));          // New epilogue header
-    
+
     // Coalesce if the previous block was free
     return coalesce(bp);
 
@@ -352,7 +302,7 @@ void *extend_heap(size_t words){
 void *find_fit(size_t size)
 {   
     char *bp;
-    for (bp = SUCC_P(heap_listp); !GET_ALLOC(HDRP(bp)); bp = SUCC_P(bp)) 
+    for (bp = SUCC_P(heap_listp); !GET_ALLOC(bp); bp = SUCC_P(bp)) 
         if(GET_SIZE(HDRP(bp)) >= size)
             return bp;
     
